@@ -1,0 +1,79 @@
+####################################################################
+# All IAM Configurations of Dish Serve (Roles, Profiles, Policies) #
+####################################################################
+---
+Resources:
+#S3 Bucket role
+  Ec2Instanceprofile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref  Ec2Role
+
+  Ec2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version:  2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:  ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+
+  Ec2RolePolicies:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ec2policies
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: 's3:*'
+            Resource: '*'
+          - Effect: Allow
+            Action: 
+              - 'ssm:DescribeAssociation'
+              - 'ssm:GetDeployablePatchSnapshotForInstance'
+              - 'ssm:GetDocument'
+              - 'ssm:DescribeDocument'
+              - 'ssm:GetManifest'
+              - 'ssm:GetParameter'
+              - 'ssm:GetParameters'
+              - 'ssm:ListAssociations'
+              - 'ssm:ListInstanceAssociations'
+              - 'ssm:PutInventory'
+              - 'ssm:PutComplianceItems'
+              - 'ssm:PutConfigurePackageResult'
+              - 'ssm:UpdateAssociationStatus'
+              - 'ssm:UpdateInstanceAssociationStatus'
+              - 'ssm:UpdateInstanceInformation'
+            Resource: '*'
+          - Effect: Allow
+            Action: 
+              - 'ssmmessages:CreateControlChannel'
+              - 'ssmmessages:CreateDataChannel'
+              - 'ssmmessages:OpenControlChannel'
+              - 'ssmmessages:OpenDataChannel'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - 'ec2messages:AcknowledgeMessage'
+              - 'ec2messages:DeleteMessage'
+              - 'ec2messages:FailMessage'
+              - 'ec2messages:GetEndpoint'
+              - 'ec2messages:GetMessages'
+              - 'ec2messages:SendReply'
+            Resource: '*'
+      Roles:
+        - !Ref  Ec2Role
+
+#Output resources
+Outputs:
+  RoleOutput:
+    Description:  Output of S3 full access Role and SSM using Instance Profile
+    Value:  !Ref  Ec2Instanceprofile
+    Export:
+      Name: Ec2InstanceProfile

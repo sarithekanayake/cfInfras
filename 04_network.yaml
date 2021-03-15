@@ -1,0 +1,173 @@
+###########################################################################
+# API Endpoint Configurations (API Gateway,Routes,Stages,VpcLink,Cognito) #
+###########################################################################
+---
+Parameters:
+  DomainNameInput:
+    Type: String
+    
+Resources:
+#VPC link creation
+  DishVPClink:
+    Type: AWS::ApiGatewayV2::VpcLink
+    Properties:
+      Name: DishServeVPCLink
+      SecurityGroupIds:
+        - !ImportValue  VpcLinkSG
+      SubnetIds:
+        - !ImportValue  ExternalAppSub01
+        - !ImportValue  ExternalAppSub02
+
+#HTTP API 
+  ApiGateway:
+    Type: AWS::ApiGatewayV2::Api
+    DependsOn:  DishVPClink
+    Properties:    
+      Name: DishApiGW
+      ProtocolType: HTTP
+
+  VPCAPIGwInt:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGateway
+      ConnectionId: !Ref  DishVPClink
+      ConnectionType: VPC_LINK
+      Description: HTTP proxy integration
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      IntegrationUri: !ImportValue  ExConnectorListner
+      PayloadFormatVersion: 1.0
+
+  cognitoInt:
+    Type: AWS::ApiGatewayV2::Integration
+    DependsOn:  DomainCreation
+    Properties:
+      ApiId: !Ref ApiGateway
+      ConnectionType: INTERNET
+      Description: HTTP cognito integration
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: POST
+      IntegrationUri: !Sub https://${DomainCreation}.auth.${AWS::Region}.amazoncognito.com/oauth2/token
+      PayloadFormatVersion: 1.0
+      RequestParameters: 
+        "overwrite:header.Content-Type": "application/x-www-form-urlencoded"
+
+  getcompanies:
+    Type: AWS::ApiGatewayV2::Route
+    DependsOn:  VPCAPIGwInt
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: 'GET /companies'
+      AuthorizationType:  JWT
+      AuthorizerId: !Ref JWTAuthorizer
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref  VPCAPIGwInt
+
+  postcompanies:
+    Type: AWS::ApiGatewayV2::Route
+    DependsOn:  VPCAPIGwInt
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: 'POST /companies'
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref  VPCAPIGwInt
+
+  postoauth:
+    Type: AWS::ApiGatewayV2::Route
+    DependsOn:  DomainCreation
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: 'POST /oauth'
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref cognitoInt
+
+  defaultstage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId:  !Ref  ApiGateway
+      AutoDeploy: true
+      StageName:  $default
+
+
+  JWTAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties: 
+      ApiId: !Ref ApiGateway
+      AuthorizerType: JWT
+      IdentitySource: 
+        - '$request.header.Authorization'
+      JwtConfiguration: 
+        Audience: 
+        - !Ref AppClient
+        Issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+      Name: jwt-authorizer
+
+#Cognito Configuration
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: http-api-user-pool
+      AutoVerifiedAttributes:
+        - email
+  AppClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn:  ResourceServe
+    Properties:
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:  
+        - client_credentials
+      ClientName: api-app-client
+      GenerateSecret: true
+      ExplicitAuthFlows:
+        - ALLOW_CUSTOM_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      AllowedOAuthScopes:
+        - dishserve/authorization
+        - dishserve/users
+      UserPoolId: !Ref UserPool
+      SupportedIdentityProviders:
+        - COGNITO
+
+  ResourceServe:
+    Type: AWS::Cognito::UserPoolResourceServer
+    Properties:
+      Name: dishserve
+      Identifier: dishserve
+      UserPoolId: !Ref  UserPool
+      Scopes:
+        - ScopeName:  authorization
+          ScopeDescription: Authorization Scope
+        - ScopeName:  users
+          ScopeDescription: Users Scope
+
+#api-cog-dishserve-sarith-testingforint-31
+  DomainCreation:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties: 
+      Domain: !Ref DomainNameInput
+      UserPoolId: !Ref  UserPool
+
+Outputs:
+  apivpc:
+    Description:  Information about api gw details
+    Value:  !Ref  DishVPClink
+    Export:
+      Name: DishVpcLink 
+  apigw:
+    Description:  Information about api gw details
+    Value:  !Ref  ApiGateway
+    Export:
+      Name: DishApiGw
+  domainname:
+    Description:  Domain Name creation
+    Value:  !Sub https://${DomainCreation}.auth.${AWS::Region}.amazoncognito.com/
+    Export:
+      Name: DName

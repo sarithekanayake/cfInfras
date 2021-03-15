@@ -1,0 +1,396 @@
+########################################################################
+# Compute & Network resources Configurations (ALB,EC2,ASG,Listners,TG) #
+########################################################################
+---
+Parameters:
+  EnvType:
+    Description:  Select the Environment to create
+    Type: String
+    Default:  dev
+    AllowedValues:
+      - dev
+      - qa
+      - prod
+    ConstraintDescription:  Must specify the environment
+  DishKey:
+    Description:  Name of an existing EC2 KeyPair to enable SSH access to the instances. Linked to AWS Parameter
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription:  Must be the name of an existing EC2 KeyPair.
+
+Conditions:
+  CreateProdResources:  !Equals [ !Ref EnvType, prod ]
+  CreateQAResources:  !Equals [ !Ref EnvType, qa ]
+  CreateDevResources:  !Equals [ !Ref EnvType, dev ]
+
+
+Resources:
+#S3 Buckets creation
+#  s3imagebucket:
+#    Type: AWS::S3::Bucket
+#    Properties:
+#      BucketName:  dishserveimagebucket2021prod
+
+#  s3rdssnapshot:
+#    Type: AWS::S3::Bucket
+#    Properties:
+#      BucketName:  dishserverdssnapshot2021prod
+
+#Internal App Subnet ALBs and Configurations
+  InternalALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType:  ipv4
+      Name: InternalAppALB
+      Scheme: internet-facing
+      SecurityGroups:
+        - !ImportValue ALBSG
+      Subnets:
+        - !ImportValue PublicSubnet01
+        - !ImportValue PublicSubnet02
+      Type: application
+
+  InternalALBListner:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn:  !Ref  InternalALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref  AdminAppTargetGroup
+
+  AdminListnerRules:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref  AdminAppTargetGroup
+      Conditions:
+        - Field:  host-header
+          HostHeaderConfig:
+            Values:
+              - admin.dishserve.com
+      ListenerArn:  !Ref  InternalALBListner
+      Priority: 1
+
+  InventListnerRules:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref  InventoryAppTargetGroup
+      Conditions:
+        - Field:  host-header
+          HostHeaderConfig:
+            Values:
+              - inventory.dishserve.com
+      ListenerArn:  !Ref  InternalALBListner
+      Priority: 2
+
+  AdminAppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: AdminAppTG
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthyThresholdCount:  2
+      HealthCheckTimeoutSeconds:  5
+      HealthCheckIntervalSeconds: 10
+      UnhealthyThresholdCount:  3
+      HealthCheckPath:  /index.html
+      VpcId:  !ImportValue  DishVPC
+      Port: 80
+      Protocol: HTTP
+
+  InventoryAppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: InventoryAppTG
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthyThresholdCount:  2
+      HealthCheckTimeoutSeconds:  5
+      HealthCheckIntervalSeconds: 10
+      UnhealthyThresholdCount:  3
+      HealthCheckPath:  /index.html
+      VpcId:  !ImportValue  DishVPC
+      Port: 80
+      Protocol: HTTP
+
+  ExConnALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType:  ipv4
+      Name: ExConnALB
+      Scheme: internal
+      SecurityGroups:
+        - !ImportValue  ExConnALBSG
+      Subnets:
+        - !ImportValue  ExternalAppSub01
+        - !ImportValue  ExternalAppSub02
+      Type: application
+
+  ExConnALBListner:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn:  !Ref  ExConnALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref  ExConnTargetGroup
+
+  ExConnTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: ExConnALBTG
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthyThresholdCount:  2
+      HealthCheckTimeoutSeconds:  5
+      HealthCheckIntervalSeconds: 10
+      UnhealthyThresholdCount:  3
+      HealthCheckPath:  /companies
+      VpcId:  !ImportValue  DishVPC
+      Port: 5000
+      Protocol: HTTP
+
+########################################
+#Launch Configurations with AutoScaling #
+########################################
+  ExConnLC:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      LaunchConfigurationName:  ExConnLC
+#      Condition:  CreateProdResources
+#      InstanceType: !If [  CreateProdResources, t2.large, t2.micro]
+      InstanceType: t2.micro
+      ImageId:  "ami-0f86a70488991335e"
+      KeyName:  !Ref  DishKey
+      IamInstanceProfile: !ImportValue  Ec2InstanceProfile
+      SecurityGroups:
+        - !ImportValue  Ec2SG
+      UserData:
+        Fn::Base64: |
+           #!/bin/bash
+           sudo yum update -y
+           sudo yum install python3 git wget -y
+           sudo pip3 install flask
+           sudo dnf install -y https://s3.ap-south-1.amazonaws.com/amazon-ssm-ap-south-1/latest/linux_amd64/amazon-ssm-agent.rpm
+           sudo systemctl start amazon-ssm-agent
+           sudo systemctl enable amazon-ssm-agent
+           echo "healthy" > /var/www/html/healthy.html
+           wget https://aws-codedeploy-ap-southeast-1.s3.amazonaws.com/latest/install
+           chmod +x ./install
+           sudo ./install auto
+
+  AdminLC:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      LaunchConfigurationName:  AdminLC
+#      Condition:  CreateProdResources
+#      InstanceType: !If [  CreateProdResources, t2.large, t2.micro]
+      InstanceType: t2.micro
+      ImageId:  "ami-0f86a70488991335e"
+      KeyName:  !Ref  DishKey
+      IamInstanceProfile: !ImportValue  Ec2InstanceProfile
+      SecurityGroups:
+        - !ImportValue  Ec2SG
+      UserData:
+        Fn::Base64: |
+           #!/bin/bash
+           sudo yum update -y
+           sudo yum install httpd php mysql php-mysqli git ruby wget -y
+           sudo dnf install -y https://s3.ap-south-1.amazonaws.com/amazon-ssm-ap-south-1/latest/linux_amd64/amazon-ssm-agent.rpm
+           sudo systemctl start amazon-ssm-agent
+           sudo systemctl enable amazon-ssm-agent
+           echo "healthy" > /var/www/html/healthy.html
+           groupadd www
+           usermod -aG www ec2-user
+           chown -R root:www /var/www
+           chmod 2775 /var/www
+           find /var/www -type d -exec chmod 2775 {} +
+           find /var/www -type f -exec chmod 0664 {} +
+           mkdir -p /var/www/inc
+           wget https://raw.githubusercontent.com/ecloudvalley/AWS-Read-Replica-RDS-Database/master/SamplePage.php
+           mv SamplePage.php /var/www/html/
+           echo "server " > /var/www/html/index.html
+           cd /home/ec2-user
+           wget https://aws-codedeploy-ap-southeast-1.s3.amazonaws.com/latest/install
+           chmod +x ./install
+           sudo ./install auto
+           chkconfig httpd on
+           systemctl start httpd
+
+  InventLC:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      LaunchConfigurationName:  InventLC
+#      Condition:  CreateProdResources
+#      InstanceType: !If [  CreateProdResources, t2.large, t2.micro]
+      InstanceType: t2.micro
+      ImageId:  "ami-0f86a70488991335e"
+      KeyName:  !Ref  DishKey
+      IamInstanceProfile: !ImportValue  Ec2InstanceProfile
+      SecurityGroups:
+        - !ImportValue  Ec2SG
+      UserData:
+        Fn::Base64: |
+           #!/bin/bash
+           sudo yum update -y
+           sudo yum install httpd php mysql php-mysqli git ruby wget -y
+           sudo dnf install -y https://s3.ap-south-1.amazonaws.com/amazon-ssm-ap-south-1/latest/linux_amd64/amazon-ssm-agent.rpm
+           sudo systemctl start amazon-ssm-agent
+           sudo systemctl enable amazon-ssm-agent
+           echo "healthy" > /var/www/html/healthy.html
+           groupadd www
+           usermod -aG www ec2-user
+           chown -R root:www /var/www
+           chmod 2775 /var/www
+           find /var/www -type d -exec chmod 2775 {} +
+           find /var/www -type f -exec chmod 0664 {} +
+           mkdir -p /var/www/inc
+           wget https://raw.githubusercontent.com/ecloudvalley/AWS-Read-Replica-RDS-Database/master/SamplePage.php
+           mv SamplePage.php /var/www/html/
+           echo "server " > /var/www/html/index.html
+           cd /home/ec2-user
+           wget https://aws-codedeploy-ap-southeast-1.s3.amazonaws.com/latest/install
+           chmod +x ./install
+           sudo ./install auto
+           chkconfig httpd on
+           systemctl start httpd
+
+  CoreBELC:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      LaunchConfigurationName:  CoreBELC
+#      Condition:  CreateProdResources
+#      InstanceType: !If [  CreateProdResources, t2.large, t2.micro]
+      InstanceType: t2.micro
+      ImageId:  "ami-0f86a70488991335e"
+      KeyName:  !Ref  DishKey
+      IamInstanceProfile: !ImportValue  Ec2InstanceProfile
+      SecurityGroups:
+        - !ImportValue  Ec2SG
+      UserData:
+        Fn::Base64: |
+           #!/bin/bash
+           sudo yum update -y
+           sudo yum install httpd php mysql php-mysqli git ruby wget -y
+           sudo dnf install -y https://s3.ap-south-1.amazonaws.com/amazon-ssm-ap-south-1/latest/linux_amd64/amazon-ssm-agent.rpm
+           sudo systemctl start amazon-ssm-agent
+           sudo systemctl enable amazon-ssm-agent
+           echo "healthy" > /var/www/html/healthy.html
+           groupadd www
+           usermod -aG www ec2-user
+           chown -R root:www /var/www
+           chmod 2775 /var/www
+           find /var/www -type d -exec chmod 2775 {} +
+           find /var/www -type f -exec chmod 0664 {} +
+           mkdir -p /var/www/inc
+           wget https://raw.githubusercontent.com/ecloudvalley/AWS-Read-Replica-RDS-Database/master/SamplePage.php
+           mv SamplePage.php /var/www/html/
+           echo "server " > /var/www/html/index.html
+           cd /home/ec2-user
+           wget https://aws-codedeploy-ap-southeast-1.s3.amazonaws.com/latest/install
+           chmod +x ./install
+           sudo ./install auto
+           chkconfig httpd on
+           systemctl start httpd
+
+  AdminEc2AutoScaling:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:  AdminTargetGroup
+    Properties:
+      AutoScalingGroupName: AdminEc2AutoScalingGroup
+      VPCZoneIdentifier:
+        - !ImportValue  InternalAppSub01
+        - !ImportValue  InternalAppSub02
+      LaunchConfigurationName: !Ref  AdminLC
+      DesiredCapacity:  !If [ CreateProdResources,  '4', '1']
+      MinSize:  !If [ CreateProdResources,  '4', '1']
+      MaxSize:  !If [ CreateProdResources,  '4', '1']
+      TargetGroupARNs:
+        - !Ref  AdminAppTargetGroup
+      Tags:
+        - Key:  Name
+          Value:  AdminPortal
+          PropagateAtLaunch:  True
+
+  InventoryEc2AutoScaling:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:  InventoryTargetGroup
+    Properties:
+      AutoScalingGroupName: InventoryEc2AutoScalingGroup
+      VPCZoneIdentifier:
+        - !ImportValue  InternalAppSub01
+        - !ImportValue  InternalAppSub02
+      LaunchConfigurationName: !Ref  InventLC
+      DesiredCapacity:  !If [ CreateProdResources,  '4', '1']
+      MinSize:  !If [ CreateProdResources,  '4', '1']
+      MaxSize:  !If [ CreateProdResources,  '4', '1']
+      TargetGroupARNs:
+        - !Ref  InventoryAppTargetGroup
+      Tags:
+        - Key:  Name
+          Value:  InventoryPortal
+          PropagateAtLaunch:  True
+
+  ExConnEc2AutoScaling:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:  ExConnTargetGroup
+    Properties:
+      AutoScalingGroupName: ExConnEc2AutoScalingGroup
+      VPCZoneIdentifier:
+        - !ImportValue  ExternalAppSub01
+        - !ImportValue  ExternalAppSub02
+      LaunchConfigurationName: !Ref  ExConnLC
+      DesiredCapacity:  !If [ CreateProdResources,  '4', '1']
+      MinSize:  !If [ CreateProdResources,  '4', '1']
+      MaxSize:  !If [ CreateProdResources,  '4', '1']
+      TargetGroupARNs:
+        - !Ref  ExConnTargetGroup
+      Tags:
+        - Key:  Name
+          Value:  ExternalConnector
+          PropagateAtLaunch:  True
+
+  CoreBEEc2AutoScaling:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:  ExConnTargetGroup
+    Properties:
+      AutoScalingGroupName: CoreBEEc2AutoScalingGroup
+      VPCZoneIdentifier:
+        - !ImportValue  ExternalAppSub01
+        - !ImportValue  ExternalAppSub02
+      LaunchConfigurationName: !Ref  ExConnLC
+      DesiredCapacity:  !If [ CreateProdResources,  '4', '1']
+      MinSize:  !If [ CreateProdResources,  '4', '1']
+      MaxSize:  !If [ CreateProdResources,  '4', '1']
+      TargetGroupARNs:
+        - !Ref  ExConnTargetGroup
+      Tags:
+        - Key:  Name
+          Value:  CoreBackEnd
+          PropagateAtLaunch:  True
+
+#Customer Backend Instance creation
+  CustomerBackend:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId:  "ami-00b8d9cb8a7161e41"
+      KeyName:  !Ref  DishKey
+      SubnetId: !Ref  ExternalAppSub01
+      SecurityGroupIds:
+        - !GetAtt  Ec2SG.GroupId
+      Tags:
+        - Key:  Name
+          Value:  CustomerBackend
+Outputs:
+#VPC
+  alblistner:
+    Description:  Information about ALB Listner details
+    Value:  !Ref  ExConnALBListner
+    Export:
+      Name: ExConnectorListner

@@ -1,0 +1,273 @@
+###################################################################################################
+# Configurations of Dish Serve VPC Stack (VPC,IG,NG,RouteTables,Subnets,Route Table Associations) #
+###################################################################################################
+# AZ 01 and AZ 02 are using for HA.
+# AZ 01 subnets have odd number in 3rd Octet & AZ 02 subnets have even number in 3rd Octet. 
+# Ex. 10.0.1.0/24 -> AZ 01 |  10.0.2.0/24 ->  AZ 02
+# 10.0.7.0, 10.0.9.0, 10.0.8.0, 10.0.10.0 Subnets are reserved for future usages.
+---
+Resources:
+#VPC creation
+  DishServeVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock:  10.0.0.0/16
+      Tags:
+        - Key:  Name
+          Value:  !Sub  ${AWS::StackName}
+
+#Subnets Creation
+#AZ 01 subnets
+  InternalAppSub01:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock:  10.0.1.0/24
+      AvailabilityZone: !Select [0, Fn::GetAZs: !Ref  'AWS::Region']
+      VpcId:  !Ref  DishServeVpc
+      Tags:
+        - Key:  Name
+          Value:  InternalAppSubnet01
+
+  ExternalAppSub01:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock:  10.0.3.0/24
+      AvailabilityZone: !Select [0, Fn::GetAZs: !Ref  'AWS::Region']
+      VpcId:  !Ref  DishServeVpc
+      Tags:
+        - Key:  Name
+          Value:  ExternalAppSubnet01
+
+  DataSubnet01:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock:  10.0.5.0/24
+      AvailabilityZone: !Select [0, Fn::GetAZs: !Ref  'AWS::Region']
+      VpcId:  !Ref  DishServeVpc
+      Tags:
+        - Key:  Name
+          Value:  DataSubnet01
+
+  PublicSub01:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock:  10.0.11.0/24
+      MapPublicIpOnLaunch:  True
+      AvailabilityZone: !Select [0, Fn::GetAZs: !Ref  'AWS::Region']
+      VpcId:  !Ref  DishServeVpc
+      Tags:
+        - Key:  Name
+          Value:  PublicSub01
+
+#AZ 02 subnets
+  InternalAppSub02:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock:  10.0.2.0/24
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref  'AWS::Region']
+      VpcId:  !Ref  DishServeVpc
+      Tags:
+        - Key:  Name
+          Value:  InternalAppSubnet02
+
+  ExternalAppSub02:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock:  10.0.4.0/24
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref  'AWS::Region']
+      VpcId:  !Ref  DishServeVpc
+      Tags:
+        - Key:  Name
+          Value:  ExternalAppSubnet02
+
+  DataSubnet02:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock:  10.0.6.0/24
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref  'AWS::Region']
+      VpcId:  !Ref  DishServeVpc
+      Tags:
+        - Key:  Name
+          Value:  DataSubnet02
+
+  PublicSub02:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock:  10.0.12.0/24
+      MapPublicIpOnLaunch:  True
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref  'AWS::Region']
+      VpcId:  !Ref  DishServeVpc
+      Tags:
+        - Key:  Name
+          Value:  PublicSub02
+
+#Internet Gateway configuration and attachment to VPC
+  DishServeIgw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key:  Name
+          Value:  !Sub  ${AWS::StackName}-IGW
+
+  VpcIgwAttchment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:  !Ref  DishServeVpc
+      InternetGatewayId:  !Ref  DishServeIgw
+
+#Nat GateWay configuration with EIP
+  DishServeNatGw:
+    Type: AWS::EC2::NatGateway
+    DependsOn:  EIP
+    Properties:
+      AllocationId: !GetAtt [EIP, AllocationId]
+      SubnetId: !Ref PublicSub01
+      Tags:
+        - Key:  Name
+          Value:  !Sub ${AWS::StackName}-NATGW
+
+  EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+#Route Table Configurations 
+  PubRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key:  Name
+          Value:  PubRoute
+      VpcId:  !Ref  DishServeVpc
+
+  PriRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key:  Name
+          Value:  PriRoute
+      VpcId:  !Ref  DishServeVpc
+
+#Subnet to Route Table associations
+  PubSub01RouteAss:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref  PubRouteTable
+      SubnetId: !Ref  PublicSub01
+
+  PubSub02RouteAss:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref  PubRouteTable
+      SubnetId: !Ref  PublicSub02
+
+  InternalApp01RouteAss:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref  PriRouteTable
+      SubnetId: !Ref  InternalAppSub01
+
+  InternalApp02RouteAss:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref  PriRouteTable
+      SubnetId: !Ref  InternalAppSub02
+
+  ExternalAppSub01RouteAss:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref  PriRouteTable
+      SubnetId: !Ref  ExternalAppSub01
+
+  ExternalAppSub02RouteAss:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref  PriRouteTable
+      SubnetId: !Ref  ExternalAppSub02
+
+  DataSub01RouteAss:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref  PriRouteTable
+      SubnetId: !Ref  DataSubnet01
+
+  DataSub02RouteAss:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref  PriRouteTable
+      SubnetId: !Ref  DataSubnet02
+
+
+#Routes Configuration
+  IGRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock:  0.0.0.0/0
+      GatewayId: !Ref DishServeIgw
+      RouteTableId: !Ref  PubRouteTable
+
+  NatGWRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref  DishServeNatGw
+      RouteTableId: !Ref  PriRouteTable
+
+#Output resources
+Outputs:
+#VPC
+  StackVpc:
+    Description:  Information about vpc details
+    Value:  !Ref  DishServeVpc
+    Export:
+      Name: DishVPC
+
+#Private Subnets <Identifier>PriSub Ex; AdminPriSub == Admin Subnet in Internal App  Subnet group
+  Internalapp01sub:
+    Description:  Output of the private Admin subnet
+    Value:  !Ref  InternalAppSub01
+    Export:
+      Name: InternalAppSub01
+
+  Externalapp01sub:
+    Description:  Output of the private External Connectors subnet
+    Value:  !Ref  ExternalAppSub01
+    Export:
+      Name: ExternalAppSub01
+
+  DBSub01:
+    Description:  Output of the private Prod DB subnet
+    Value:  !Ref  DataSubnet01
+    Export:
+      Name: DataSubnet01
+
+  Internalapp02sub:
+    Description:  Output of the private Admin subnet
+    Value:  !Ref  InternalAppSub02
+    Export:
+      Name: InternalAppSub02
+
+  Externalapp02sub:
+    Description:  Output of the private External Connectors subnet
+    Value:  !Ref  ExternalAppSub02
+    Export:
+      Name: ExternalAppSub02
+
+  DBSub02:
+    Description:  Output of the private Prod DB subnet
+    Value:  !Ref  DataSubnet02
+    Export:
+      Name: DataSubnet02
+
+#Public Subnets <type>SubAZ<AZ number> Ex; PublicSubAZa == Public Subnet in Availability Zone A.
+  Public01:
+    Description:  Output of the Public subnet AZ 01
+    Value:  !Ref  PublicSub01
+    Export:
+      Name: PublicSubnet01
+
+  Public02:
+    Description:  Output of the Public subnet AZ 02
+    Value:  !Ref  PublicSub02
+    Export:
+      Name: PublicSubnet02

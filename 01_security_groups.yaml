@@ -1,0 +1,126 @@
+#########################################
+# All Security Groups of Dish Serve VPC #
+#########################################
+---
+Resources:
+#Security Groups
+  WebDMZSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Web Ec2 and ALB SG
+      GroupName:  WebDMZSG
+      VpcId:  !ImportValue  DishVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: icmp
+          FromPort: 8
+          ToPort: -1
+          CidrIp: 10.0.0.0/16
+
+  DataBaseSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Data Base SG
+      GroupName:  DataBaseSG
+      VpcId:  !ImportValue  DishVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId:  !GetAtt WebDMZSG.GroupId
+
+  ALBSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId:  !ImportValue  DishVPC
+      GroupName:  InternetAlbSG
+      GroupDescription: Enable HTTP/HTTPS access
+      SecurityGroupIngress:
+        - IpProtocol: 'tcp'
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: 'tcp'
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: 0.0.0.0/0
+
+  VpcLinkSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId:  !ImportValue  DishVPC
+      GroupName:  VpcSG
+      GroupDescription: Enable HTTP/HTTPS access
+      SecurityGroupIngress:
+        - IpProtocol: 'tcp'
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: 'tcp'
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: 0.0.0.0/0
+
+  ExConnALBSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId:  !ImportValue  DishVPC
+      GroupName:  InternalSG
+      GroupDescription: Enable HTTP/HTTPS access
+      SecurityGroupIngress:
+        - IpProtocol: 'tcp'
+          FromPort: '80'
+          ToPort: '80'
+          SourceSecurityGroupId:  !GetAtt VpcLinkSecurityGroup.GroupId
+        - IpProtocol: 'tcp'
+          FromPort: '443'
+          ToPort: '443'
+          SourceSecurityGroupId:  !GetAtt VpcLinkSecurityGroup.GroupId
+
+
+Outputs:
+#Security Groups
+  WebSG:
+    Description:  Ec2 security group
+    Value:  !Ref  WebDMZSG
+    Export:
+      Name: Ec2SG
+  
+  DB:
+    Description:  DataBase security group
+    Value:  !Ref  DataBaseSG 
+    Export:
+      Name: DBSG
+
+  InternetALB:
+    Description:  Internet facing Load Balancer security group
+    Value:  !Ref  ALBSecurityGroup 
+    Export:
+      Name: ALBSG
+
+  InternalALB:
+    Description:  Internal Load Balancer security group
+    Value:  !Ref  ExConnALBSecurityGroup 
+    Export:
+      Name: ExConnALBSG
+
+  VPCLink:
+    Description:  API Gw Vpc Link security group
+    Value:  !Ref  VpcLinkSecurityGroup 
+    Export:
+      Name: VpcLinkSG  
