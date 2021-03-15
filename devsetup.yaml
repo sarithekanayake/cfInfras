@@ -1,0 +1,429 @@
+---
+Parameters:
+  DishKey:
+    Description:  Name of an existing EC2 KeyPair to enable SSH access to the instances. Linked to AWS Parameter
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription:  Must be the name of an existing EC2 KeyPair.
+
+Resources:
+#VPC creation
+  DishServeVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock:  10.0.0.0/16
+      Tags:
+        - Key:  Name
+          Value:  !Sub  ${AWS::StackName}
+
+#Subnets Creation
+#AZ 01 subnets
+  InternalAppSub01:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock:  10.0.1.0/24
+      AvailabilityZone: !Select [0, Fn::GetAZs: !Ref  'AWS::Region']
+      VpcId:  !Ref  DishServeVpc
+      Tags:
+        - Key:  Name
+          Value:  InternalAppSubnet01
+
+  DataSubnet01:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock:  10.0.5.0/24
+      AvailabilityZone: !Select [0, Fn::GetAZs: !Ref  'AWS::Region']
+      VpcId:  !Ref  DishServeVpc
+      Tags:
+        - Key:  Name
+          Value:  DataSubnet01
+
+  PublicSub01:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock:  10.0.11.0/24
+      MapPublicIpOnLaunch:  True
+      AvailabilityZone: !Select [0, Fn::GetAZs: !Ref  'AWS::Region']
+      VpcId:  !Ref  DishServeVpc
+      Tags:
+        - Key:  Name
+          Value:  PublicSub01
+
+#AZ 02 subnets
+  DataSubnet02:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock:  10.0.6.0/24
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref  'AWS::Region']
+      VpcId:  !Ref  DishServeVpc
+      Tags:
+        - Key:  Name
+          Value:  DataSubnet02
+
+  PublicSub02:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock:  10.0.12.0/24
+      MapPublicIpOnLaunch:  True
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref  'AWS::Region']
+      VpcId:  !Ref  DishServeVpc
+      Tags:
+        - Key:  Name
+          Value:  PublicSub02
+
+#Internet Gateway configuration and attachment to VPC
+  DishServeIgw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key:  Name
+          Value:  !Sub  ${AWS::StackName}-IGW
+
+  VpcIgwAttchment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:  !Ref  DishServeVpc
+      InternetGatewayId:  !Ref  DishServeIgw
+
+#Nat GateWay configuration with EIP
+  DishServeNatGw:
+    Type: AWS::EC2::NatGateway
+    DependsOn:  EIP
+    Properties:
+      AllocationId: !GetAtt [EIP, AllocationId]
+      SubnetId: !Ref PublicSub01
+      Tags:
+        - Key:  Name
+          Value:  !Sub ${AWS::StackName}-NATGW
+
+  EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+#Route Table Configurations 
+  PubRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key:  Name
+          Value:  PubRoute
+      VpcId:  !Ref  DishServeVpc
+
+  PriRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key:  Name
+          Value:  PriRoute
+      VpcId:  !Ref  DishServeVpc
+
+#Subnet to Route Table associations
+  PubSub01RouteAss:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref  PubRouteTable
+      SubnetId: !Ref  PublicSub01
+
+  PubSub02RouteAss:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref  PubRouteTable
+      SubnetId: !Ref  PublicSub02
+
+  InternalApp01RouteAss:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref  PriRouteTable
+      SubnetId: !Ref  InternalAppSub01
+
+  DataSub01RouteAss:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref  PriRouteTable
+      SubnetId: !Ref  DataSubnet01
+
+  DataSub02RouteAss:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref  PriRouteTable
+      SubnetId: !Ref  DataSubnet02
+
+#Routes Configuration
+  IGRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock:  0.0.0.0/0
+      GatewayId: !Ref DishServeIgw
+      RouteTableId: !Ref  PubRouteTable
+
+  NatGWRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref  DishServeNatGw
+      RouteTableId: !Ref  PriRouteTable
+
+#Security Group Configurations
+  Ec2SG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Ec2 SG
+      GroupName:  Ec2SG
+      VpcId:  !Ref  DishServeVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: icmp
+          FromPort: 8
+          ToPort: -1
+          CidrIp: 10.0.0.0/16
+
+  AlbSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB SG
+      GroupName:  ALB-SG
+      VpcId:  !Ref  DishServeVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: icmp
+          FromPort: 8
+          ToPort: -1
+          CidrIp: 10.0.0.0/16
+
+  DataBaseSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Data Base SG
+      GroupName:  DataBaseSG
+      VpcId:  !Ref  DishServeVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId:  !GetAtt Ec2SG.GroupId
+
+#IAM Role Configurations
+  Ec2Instanceprofile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref  Ec2Role
+
+  Ec2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version:  2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:  ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+
+  Ec2RolePolicies:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ec2policies
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: 's3:*'
+            Resource: '*'
+          - Effect: Allow
+            Action: 
+              - 'ssm:DescribeAssociation'
+              - 'ssm:GetDeployablePatchSnapshotForInstance'
+              - 'ssm:GetDocument'
+              - 'ssm:DescribeDocument'
+              - 'ssm:GetManifest'
+              - 'ssm:GetParameter'
+              - 'ssm:GetParameters'
+              - 'ssm:ListAssociations'
+              - 'ssm:ListInstanceAssociations'
+              - 'ssm:PutInventory'
+              - 'ssm:PutComplianceItems'
+              - 'ssm:PutConfigurePackageResult'
+              - 'ssm:UpdateAssociationStatus'
+              - 'ssm:UpdateInstanceAssociationStatus'
+              - 'ssm:UpdateInstanceInformation'
+            Resource: '*'
+          - Effect: Allow
+            Action: 
+              - 'ssmmessages:CreateControlChannel'
+              - 'ssmmessages:CreateDataChannel'
+              - 'ssmmessages:OpenControlChannel'
+              - 'ssmmessages:OpenDataChannel'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - 'ec2messages:AcknowledgeMessage'
+              - 'ec2messages:DeleteMessage'
+              - 'ec2messages:FailMessage'
+              - 'ec2messages:GetEndpoint'
+              - 'ec2messages:GetMessages'
+              - 'ec2messages:SendReply'
+            Resource: '*'
+      Roles:
+        - !Ref  Ec2Role
+
+##########################################################################
+#ALB
+  PubALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType:  ipv4
+      Name: publicalb
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref  AlbSG
+      Subnets:
+        - !Ref  PublicSub01
+        - !Ref  PublicSub02
+      Type: application
+
+  ALBListner01:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn:  !Ref  PubALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref  ALBTargetGroup
+
+  ALBListner02:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn:  !Ref  PubALB
+      Port: 5000
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref  ApiTargetGroup
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: PublicALBTG
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthyThresholdCount:  2
+      HealthCheckTimeoutSeconds:  5
+      HealthCheckIntervalSeconds: 10
+      UnhealthyThresholdCount:  3
+      HealthCheckPath:  /index.html
+      VpcId:  !Ref  DishServeVpc
+      Port: 80
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key:  stickiness.enabled
+          Value:  True
+
+  ApiTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: ApiALBTG
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthyThresholdCount:  2
+      HealthCheckTimeoutSeconds:  5
+      HealthCheckIntervalSeconds: 10
+      UnhealthyThresholdCount:  3
+      HealthCheckPort:  80
+      HealthCheckPath:  /index.html
+      VpcId:  !Ref  DishServeVpc
+      Port: 5000
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key:  stickiness.enabled
+          Value:  True
+
+#Custom AMI ubuntu: ami-0ba78b338bc36c209
+#Rhel AMI: ami-0f86a70488991335e
+  DevLC:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      LaunchConfigurationName:  "DevLC"
+      InstanceType: t2.medium
+      ImageId:  "ami-0ad80d512ce09bfe7"
+      KeyName:  !Ref  DishKey
+      IamInstanceProfile: !Ref  Ec2Instanceprofile
+      SecurityGroups:
+        - !Ref  Ec2SG
+      UserData:
+        Fn::Base64: |
+           #!/bin/bash
+           sudo apt update -y
+           sudo apt install python3 git wget -y
+           sudo pip3 install flask
+           sudo snap install amazon-ssm-agent
+           sudo systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service
+           sudo systemctl start amazon-ssm-agent
+           sudo systemctl enable amazon-ssm-agent
+           echo "healthy" > /var/www/html/healthy.html
+           wget https://aws-codedeploy-ap-southeast-1.s3.amazonaws.com/latest/install
+           chmod +x ./install
+           sudo ./install auto
+           sudo service codedeploy-agent start
+
+  Ec2AutoScaling:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:  ALBTargetGroup
+    Properties:
+      AutoScalingGroupName: DevEc2AutoScalingGroup
+      VPCZoneIdentifier:
+        - !Ref  InternalAppSub01
+      LaunchConfigurationName: !Ref  DevLC
+      DesiredCapacity:  '2'
+      MinSize:  '2'
+      MaxSize:  '3'
+      TargetGroupARNs:
+        - !Ref  ALBTargetGroup
+        - !Ref  ApiTargetGroup
+      Tags:
+        - Key:  Name
+          Value:  Dev
+          PropagateAtLaunch:  True
+
+  ScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref Ec2AutoScaling
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 75.0 
